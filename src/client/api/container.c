@@ -23,6 +23,7 @@
 #define D_LOGFAC       DD_FAC(client)
 
 #include <daos/container.h>
+#include <daos/object.h>
 #include <daos/task.h>
 #include "client_internal.h"
 #include "task_internal.h"
@@ -540,8 +541,8 @@ daos_cont_list_snap(daos_handle_t coh, int *nr, daos_epoch_t *epochs,
 }
 
 int
-daos_cont_create_snap(daos_handle_t coh, daos_epoch_t *epoch, char *name,
-		      daos_event_t *ev)
+daos_cont_create_snap_opt(daos_handle_t coh, daos_epoch_t *epoch, char *name,
+			  enum daos_snapshot_opts opts, daos_event_t *ev)
 {
 	daos_cont_create_snap_t	*args;
 	tse_task_t		*task;
@@ -557,8 +558,17 @@ daos_cont_create_snap(daos_handle_t coh, daos_epoch_t *epoch, char *name,
 	args->coh	= coh;
 	args->epoch	= epoch;
 	args->name	= name;
+	args->opts	= opts;
 
 	return dc_task_schedule(task, true);
+}
+
+int
+daos_cont_create_snap(daos_handle_t coh, daos_epoch_t *epoch, char *name,
+		      daos_event_t *ev)
+{
+	return daos_cont_create_snap_opt(coh, epoch, name,
+					 DAOS_SNAP_OPT_CR, ev);
 }
 
 int
