@@ -189,3 +189,112 @@ func MustCreateFaultDomainFromString(domainStr string) *FaultDomain {
 	}
 	return fd
 }
+
+type (
+	// FaultDomainTree is a node in a tree of FaultDomain objects.
+	FaultDomainTree struct {
+		Domain   *FaultDomain
+		Children []*FaultDomainTree
+	}
+)
+
+// WithDomain changes the domain of the FaultDomainTree node.
+func (t *FaultDomainTree) WithDomain(domain *FaultDomain) *FaultDomainTree {
+	if t == nil {
+		t = NewFaultDomainTree()
+	}
+	t.Domain = domain
+	return t
+}
+
+// AddDomain adds a child fault domain, including intermediate nodes, to the
+// fault domain tree.
+func (t *FaultDomainTree) AddDomain(domain *FaultDomain) error {
+	if t == nil {
+		return errors.New("can't add to nil FaultDomainTree")
+	}
+
+	if domain.Empty() {
+		return errors.New("can't add empty fault domain to tree")
+	}
+
+	domainAsTree := NewFaultDomainTreeFromDomain(domain)
+
+	return t.Merge(domainAsTree)
+}
+
+// Merge merges another FaultDomainTree into this one.
+func (t *FaultDomainTree) Merge(t2 *FaultDomainTree) error {
+	if t == nil {
+		return errors.New("can't merge into nil FaultDomainTree")
+	}
+
+	if t2 == nil {
+		return nil // nothing to do
+	}
+
+	toBeParent := t
+	toBeAdded := t2
+
+	for toBeParent.Domain.Equals(toBeAdded.Domain) {
+		if toBeAdded.IsLeaf() {
+			return nil // t2 is already part of the tree
+		}
+
+		toBeAdded = toBeAdded.Children[0]
+		for _, c := range toBeParent.Children {
+			if c.Domain.Equals(toBeAdded.Domain) {
+				toBeParent = c
+				break
+			}
+		}
+	}
+
+	toBeParent.Children = append(toBeParent.Children, toBeAdded)
+	return nil
+}
+
+// IsRoot verifies if the FaultDomainTree is a root node.
+func (t *FaultDomainTree) IsRoot() bool {
+	if t == nil {
+		return false
+	}
+	if t.Domain.Empty() {
+		return true
+	}
+	return false
+}
+
+// IsLeaf verifies if the FaultDomainTree is a leaf node.
+func (t *FaultDomainTree) IsLeaf() bool {
+	if t == nil {
+		return false
+	}
+	if len(t.Children) == 0 {
+		return true
+	}
+	return false
+}
+
+// NewFaultDomainTree creates a new FaultDomainTree root node.
+func NewFaultDomainTree() *FaultDomainTree {
+	fd := MustCreateFaultDomain() // Empty fault domain will not fail
+	return &FaultDomainTree{
+		Domain: fd,
+	}
+}
+
+// NewFaultDomainTreeFromDomain creates a FaultDomainTree with a single branch
+// of domains from the root to the bottom of the FaultDomain path.
+func NewFaultDomainTreeFromDomain(domain *FaultDomain) *FaultDomainTree {
+	tree := NewFaultDomainTree()
+	if !domain.Empty() {
+		node := tree
+		for i := 0; i < domain.NumLevels(); i++ {
+			child := NewFaultDomainTree().WithDomain(MustCreateFaultDomain(domain.Domains[:i+1]...))
+			node.Children = append(node.Children, child)
+			node = child
+		}
+	}
+	return tree
+}
