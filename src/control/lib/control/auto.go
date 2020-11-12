@@ -294,15 +294,18 @@ func (req *ConfigGenerateReq) validateScmStorage(ctx context.Context, scmNamespa
 		return scmNamespaces[i].NumaNode < scmNamespaces[j].NumaNode
 	})
 
-	pmemPaths := make([]string, 0, len(scmNamespaces))
-	for _, ns := range scmNamespaces {
+	pmemPaths := make([]string, 0, req.NumPmem)
+	for idx, ns := range scmNamespaces {
 		pmemPaths = append(pmemPaths, fmt.Sprintf("%s/%s", pmemBdevDir, ns.BlockDevice))
+		if idx == req.NumPmem-1 {
+			break
+		}
 	}
-	req.Log.Debugf("pmem devs %v (%d)", pmemPaths, len(pmemPaths))
+	req.Log.Debugf("selected pmem devs %v (%d)", pmemPaths, len(pmemPaths))
 
-	if len(scmNamespaces) < req.NumPmem {
+	if len(pmemPaths) < req.NumPmem {
 		return nil, errors.Errorf("insufficient number of pmem devices, want %d got %d",
-			req.NumPmem, len(scmNamespaces))
+			req.NumPmem, len(pmemPaths))
 	}
 
 	// sanity check that each pmem aligns with expected numa node
