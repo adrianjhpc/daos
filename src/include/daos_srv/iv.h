@@ -291,6 +291,12 @@ enum iv_key {
 	/* Container properties */
 	IV_CONT_PROP,
 	IV_POOL_HDL,
+	/* Each server report its own EC epoch to leader */
+	IV_CONT_AGG_EPOCH_REPORT,
+	/* leader sync the minum epoch(VOS aggregate epoch boundry) to all
+	 * other servers
+	 */
+	IV_CONT_AGG_EPOCH_BOUNDRY,
 };
 
 int ds_iv_fetch(struct ds_iv_ns *ns, struct ds_iv_key *key, d_sg_list_t *value,
