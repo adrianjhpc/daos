@@ -1776,9 +1776,37 @@ out:
 	return rc;
 }
 
+static int
+lookup_rel_path(dfs_t *dfs, dfs_obj_t *root, const char *path, int flags, dfs_obj_t **_obj,
+	        mode_t *mode, struct stat *stbuf);
+
 int
 dfs_lookup(dfs_t *dfs, const char *path, int flags, dfs_obj_t **_obj,
-	   mode_t *mode, struct stat *stbuf)
+           mode_t *mode, struct stat *stbuf)
+{
+	if (dfs == NULL || !dfs->mounted)
+		return EINVAL;
+	if (_obj == NULL)
+		return EINVAL;
+	if (path == NULL || strnlen(path, PATH_MAX) > PATH_MAX - 1)
+		return EINVAL;
+	if (path[0] != '/')
+		return EINVAL;
+
+        /** if we added a prefix, check and skip over it */
+        if (dfs->prefix) {
+                if (strncmp(dfs->prefix, path, dfs->prefix_len) != 0)
+                        return EINVAL;
+
+                path += dfs->prefix_len;
+        }
+
+	return lookup_rel_path(dfs, &dfs->root, path, flags, _obj, mode, stbuf);
+}
+
+static int
+lookup_rel_path(dfs_t *dfs, dfs_obj_t *root, const char *path, int flags, dfs_obj_t **_obj,
+		mode_t *mode, struct stat *stbuf)
 {
 	dfs_obj_t		parent;
 	dfs_obj_t		*obj = NULL;
@@ -1789,23 +1817,6 @@ dfs_lookup(dfs_t *dfs, const char *path, int flags, dfs_obj_t **_obj,
 	struct dfs_entry	entry = {0};
 	size_t			len;
 	int			rc;
-
-	if (dfs == NULL || !dfs->mounted)
-		return EINVAL;
-	if (_obj == NULL)
-		return EINVAL;
-	if (path == NULL || strnlen(path, PATH_MAX) > PATH_MAX - 1)
-		return EINVAL;
-	if (path[0] != '/')
-		return EINVAL;
-
-	/** if we added a prefix, check and skip over it */
-	if (dfs->prefix) {
-		if (strncmp(dfs->prefix, path, dfs->prefix_len) != 0)
-			return EINVAL;
-
-		path += dfs->prefix_len;
-	}
 
 	daos_mode = get_daos_obj_mode(flags);
 	if (daos_mode == -1)
@@ -1822,10 +1833,10 @@ dfs_lookup(dfs_t *dfs, const char *path, int flags, dfs_obj_t **_obj,
 	if (obj == NULL)
 		D_GOTO(out, rc = ENOMEM);
 
-	oid_cp(&obj->oid, dfs->root.oid);
-	oid_cp(&obj->parent_oid, dfs->root.parent_oid);
-	obj->mode = dfs->root.mode;
-	strncpy(obj->name, dfs->root.name, DFS_MAX_PATH + 1);
+	oid_cp(&obj->oid, root->oid);
+	oid_cp(&obj->parent_oid, root->parent_oid);
+	obj->mode = root->mode;
+	strncpy(obj->name, root->name, DFS_MAX_PATH + 1);
 
 	rc = daos_obj_open(dfs->coh, obj->oid, daos_mode, &obj->oh, NULL);
 	if (rc)
@@ -1907,8 +1918,8 @@ dfs_lookup_loop:
 			if (token) {
 				dfs_obj_t *sym;
 
-				rc = dfs_lookup(dfs, entry.value, flags, &sym,
-						NULL, NULL);
+				rc = lookup_rel_path(dfs, &parent, entry.value,
+						     flags, &sym, NULL, NULL);
 				if (rc) {
 					D_DEBUG(DB_TRACE,
 						"Failed to lookup symlink %s\n",
@@ -2218,13 +2229,27 @@ dfs_lookup_rel(dfs_t *dfs, dfs_obj_t *parent, const char *name, int flags,
 			stbuf->st_blocks = (stbuf->st_size + (1 << 9) - 1) >> 9;
 		}
 	} else if (S_ISLNK(entry.mode)) {
-		/* Create a truncated version of the string */
-		D_STRNDUP(obj->value, entry.value, entry.value_len + 1);
-		if (obj->value == NULL)
-			D_GOTO(err_obj, rc = ENOMEM);
-		D_FREE(entry.value);
-		if (stbuf)
-			stbuf->st_size = entry.value_len;
+		if (flags & O_NOFOLLOW) {
+			/* Create a truncated version of the string */
+			D_STRNDUP(obj->value, entry.value, entry.value_len + 1);
+			// TODO free entry.value here?
+			if (obj->value == NULL)
+				D_GOTO(err_obj, rc = ENOMEM);
+			D_FREE(entry.value);
+			if (stbuf)
+				stbuf->st_size = entry.value_len;
+		} else {
+			/* dereference the symlink */
+			rc = lookup_rel_path(dfs, parent, entry.value, flags,
+					     &obj, mode, stbuf);
+			if (rc) {
+				D_ERROR("Failed to lookup symlink %s\n", entry.value);
+				D_FREE(entry.value);
+				D_GOTO(err_obj, rc = daos_der2errno(rc));
+			}
+			D_FREE(entry.value);
+			return rc;
+		}
 	} else if (S_ISDIR(entry.mode)) {
 		rc = daos_obj_open(dfs->coh, entry.oid, daos_mode, &obj->oh,
 				   NULL);
@@ -3008,7 +3033,8 @@ dfs_access(dfs_t *dfs, dfs_obj_t *parent, const char *name, int mask)
 
 	D_ASSERT(entry.value);
 
-	rc = dfs_lookup(dfs, entry.value, O_RDONLY, &sym, NULL, NULL);
+	rc = lookup_rel_path(dfs, &dfs->root, entry.value, O_RDONLY, &sym,
+			     NULL, NULL);
 	if (rc) {
 		D_DEBUG(DB_TRACE, "Failed to lookup symlink %s\n",
 			entry.value);
